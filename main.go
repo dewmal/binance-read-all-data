@@ -58,7 +58,6 @@ func main() {
 				log.Println("read:", err)
 				return
 			}
-			log.Println("receve", message)
 			rdb.Publish(ctx, channelName, message)
 		}
 		wg.Done()
