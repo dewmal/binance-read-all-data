@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/websocket"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"time"
 )
 
 var addr = flag.String("bi", "stream.binance.com:9443", "binance webservice address")
@@ -56,6 +58,7 @@ func main() {
 				log.Println("read:", err)
 				return
 			}
+			log.Println("receve", message)
 			rdb.Publish(ctx, channelName, message)
 		}
 		wg.Done()
@@ -76,5 +79,33 @@ func main() {
 	if err != nil {
 		log.Println(err)
 	}
-	wg.Wait()
+	//wg.Wait()
+
+	c1, cancel := context.WithCancel(context.Background())
+
+	exitCh := make(chan struct{})
+	go func(ctx context.Context) {
+		for {
+
+			select {
+			case <-ctx.Done():
+				fmt.Println("received done, exiting in 500 milliseconds")
+				time.Sleep(500 * time.Millisecond)
+				exitCh <- struct{}{}
+				return
+			default:
+			}
+		}
+	}(c1)
+
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt)
+	go func() {
+		select {
+		case <-signalCh:
+			cancel()
+			return
+		}
+	}()
+	<-exitCh
 }
