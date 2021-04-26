@@ -8,6 +8,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/websocket"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -40,7 +41,12 @@ func main() {
 	u := url.URL{Scheme: "wss", Host: *addr, Path: "/ws"}
 	log.Printf("connecting to %s", u.String())
 
-	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	Dialer := websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: 500 * time.Second,
+	}
+	c, _, err := Dialer.Dial(u.String(), nil)
+
 	if err != nil {
 		log.Fatal("dial:", err)
 	}
@@ -55,30 +61,40 @@ func main() {
 		for {
 			_, message, err := c.ReadMessage()
 			if err != nil {
-				log.Println("read:", err)
-				return
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					fmt.Printf("error: %v", err)
+				}
+				fmt.Println(err)
+				c, _, err = Dialer.Dial(u.String(), nil)
 			}
 			rdb.Publish(ctx, channelName, message)
 		}
 		wg.Done()
 	}()
-
 	b := []byte(
 		`{
   "method": "SUBSCRIBE",
   "params":["!ticker@arr"],
   "id":1
 }`)
-	var f interface{}
-	err = json.Unmarshal(b, &f)
-	if err != nil {
-		log.Println(err)
-	}
-	err = c.WriteJSON(f)
-	if err != nil {
-		log.Println(err)
-	}
-	//wg.Wait()
+	sendMessageToBinance(c, b)
+
+	ticker := time.NewTicker(5 * time.Second)
+	doneTimer := make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-doneTimer:
+				return
+			case <-ticker.C:
+				if err := c.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+					fmt.Println("Can't write to socket...disconnecting")
+					return
+				}
+			}
+		}
+	}()
 
 	c1, cancel := context.WithCancel(context.Background())
 
@@ -107,4 +123,17 @@ func main() {
 		}
 	}()
 	<-exitCh
+}
+
+func sendMessageToBinance(c *websocket.Conn, data []byte) {
+
+	var f interface{}
+	err := json.Unmarshal(data, &f)
+	if err != nil {
+		log.Println(err)
+	}
+	err = c.WriteJSON(f)
+	if err != nil {
+		log.Println(err)
+	}
 }
